@@ -2,7 +2,7 @@
 from loguru import logger
 
 from get_price_wb_wallet import get_wallet_discount_percent, get_discount_settings, calc_price_with_wb_wallet
-from DataBaseWb.saver import Item
+from pars.DataBaseWb.saver import Item
 
 
 def add_price_with_wb_wallet(item_models: list[Item]):

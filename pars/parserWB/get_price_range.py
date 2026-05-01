@@ -9,7 +9,7 @@ import json
 
 
 cookies = {
-    'x_wbaas_token': '_wbauid=625729131775405841; _cp=1; x_wbaas_token=1.1000.ef12fb695b4f4e81b77ea905af166c6f.MHw3Ny4yMjIuOTYuMTAzfE1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIENocm9tZS8xNDcuMC4wLjAgU2FmYXJpLzUzNy4zNiBFZGcvMTQ3LjAuMC4wfDE3Nzc5MjYyNDR8cmV1c2FibGV8MnxleUpvWVhOb0lqb2lJbjA9fDB8M3wxNzc3MzIxNDQ0fDE=.MEUCIDmFhIvh4xdi3Xo8/c3sLKxvgMNQ8tXFrYtyC/RF5FxBAiEAw0uyEX3EXl+oA4WmpdxGDKdxN4pbvMH58k4T/ggAhJA=',
+    'x_wbaas_token': 'МОЖНО ИМПОРТНУТЬ ИЗ main.py, если IDE ругаться не будет:D',
     '_wbauid': '625729131775405841',
     '_cp': '1',
 }

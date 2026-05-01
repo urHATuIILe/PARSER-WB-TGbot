@@ -1,1 +1,1 @@
-PASSWORD = 'ThDrzeMz59!'
+PASSWORD = 'СЮДА СВОЙ ПАРОЛЬ ВСТАВИТЬ НУЖНО ИЗ POSTGRESQL'

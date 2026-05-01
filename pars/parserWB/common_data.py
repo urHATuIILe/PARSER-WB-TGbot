@@ -1,3 +1,4 @@
+#Потом как нибудь все сюда перенсу
 headers = {
     'accept': '*/*',
     'accept-language': 'ru,en;q=0.9,en-GB;q=0.8,en-US;q=0.7',

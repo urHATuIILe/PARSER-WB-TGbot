@@ -1,6 +1,4 @@
-"""
-Telegram Bot для posting + parsing + images
-"""
+import aiohttp
 import glob
 import sys
 import os
@@ -10,6 +8,12 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from loguru import logger
+
+from aiogram import Bot, Dispatcher, F
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.filters import Command
+from aiogram.enums import ParseMode
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
 
 from pars.DataBaseWb.database import DatabaseManager
 from pars.tg_bot.config import BOT_TOKEN, CHANNEL_ID, ADMIN_IDS, PROXY_URL
@@ -23,9 +27,6 @@ class TgPostingBot:
         self._parsing_lock = threading.Lock()
 
     async def _create_bot(self):
-        from aiogram import Bot, Dispatcher
-        from aiogram.client.session.aiohttp import AiohttpSession
-
         if PROXY_URL:
             session = AiohttpSession(proxy=PROXY_URL)
             self.bot = Bot(token=BOT_TOKEN, session=session)
@@ -37,8 +38,6 @@ class TgPostingBot:
         self._register_handlers()
 
     def _register_handlers(self):
-        from aiogram.filters import Command
-
         # Команды
         self.dp.message(Command("start"))(self.cmd_start)
         self.dp.message(Command("post"))(self.cmd_post)
@@ -47,8 +46,6 @@ class TgPostingBot:
         self.dp.message(Command("parsing"))(self.cmd_parsing)
         self.dp.message(Command("images"))(self.cmd_images)
 
-        # Callbacks для IMAGES
-        from aiogram import F
 
         @self.dp.callback_query(F.data.startswith('img_save_'))
         async def callback_img_save(callback):
@@ -60,10 +57,9 @@ class TgPostingBot:
 
         @self.dp.callback_query(F.data == 'img_cancel')
         async def callback_img_cancel(callback):
-            await callback.message.answer('❌ Отменено')
+            await callback.message.answer('Отменено')
             await callback.answer()
 
-        # Callbacks для POSTING
         @self.dp.callback_query(F.data.startswith('postphoto_'))
         async def callback_post_photo(callback):
             await self._on_post_with_photo(callback)
@@ -77,16 +73,10 @@ class TgPostingBot:
             await callback.message.answer('❌ Отменено')
             await callback.answer()
 
-    # ============================================
-    # КОМАНДЫ
-    # ============================================
-
     async def cmd_start(self, message):
-        from aiogram.enums import ParseMode
-
         if message.from_user.id not in ADMIN_IDS:
             await message.answer(
-                "❌ <b>ДОСТУП ЗАПРЕЩЁН</b>",
+                "<b>ДОСТУП ЗАПРЕЩЁН</b>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -102,10 +92,8 @@ class TgPostingBot:
         )
 
     async def cmd_tables(self, message):
-        from aiogram.enums import ParseMode
-
         if message.from_user.id not in ADMIN_IDS:
-            await message.answer("❌ Нет доступа")
+            await message.answer("Нет доступа")
             return
 
         try:
@@ -113,10 +101,10 @@ class TgPostingBot:
                 tables = db.list_tables()
 
             if not tables:
-                await message.answer("📭 Таблиц нет")
+                await message.answer("Таблиц нет")
                 return
 
-            text = f"📊 <b>Таблицы ({len(tables)}):</b>\n\n"
+            text = f"<b>Таблицы ({len(tables)}):</b>\n\n"
 
             for i, table in enumerate(tables[:20], 1):
                 with DatabaseManager() as db_count:
@@ -127,22 +115,18 @@ class TgPostingBot:
 
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await message.answer(f"❌ Ошибка: {e}")
+            await message.answer(f"Ошибка: {e}")
 
     async def cmd_images(self, message):
-        from aiogram.enums import ParseMode
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        import asyncio
-
         if message.from_user.id not in ADMIN_IDS:
-            await message.answer("❌ Нет доступа")
+            await message.answer("Нет доступа")
             return
 
         args = message.text.split(maxsplit=2)
 
         if len(args) < 3:
             await message.answer(
-                "❌ Формат:\n<code>/images таблица номер</code>",
+                "Формат:\n<code>/images таблица номер</code>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -152,14 +136,14 @@ class TgPostingBot:
         try:
             row_num = int(args[2])
         except ValueError:
-            await message.answer("❌ Номер — число!")
+            await message.answer("Номер — число!")
             return
 
         data = self._get_row(table_name, row_num)
 
         if not data:
             await message.answer(
-                f"❌ Не найдено: <code>{table_name}</code> строка {row_num}",
+                f"Не найдено: <code>{table_name}</code> строка {row_num}",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -176,13 +160,13 @@ class TgPostingBot:
         )
 
         if not images_str or images_str.strip() == '':
-            await message.answer("⚠️ <b>В БД нет изображений!</b>", parse_mode=ParseMode.HTML)
+            await message.answer("<b>В БД нет изображений!</b>", parse_mode=ParseMode.HTML)
             return
 
         image_urls = [img.strip() for img in images_str.split(';') if img.strip()]
 
         if not image_urls:
-            await message.answer("⚠️ <b>Ссылки пустые!</b>", parse_mode=ParseMode.HTML)
+            await message.answer("<b>Ссылки пустые!</b>", parse_mode=ParseMode.HTML)
             return
 
         total_count = len(image_urls)
@@ -191,7 +175,7 @@ class TgPostingBot:
 
         for i in range(preview_count):
             try:
-                caption = f"📷 {i+1}/{total_count}" if i == 0 else f"{i+1}/{total_count}"
+                caption = f"{i+1}/{total_count}" if i == 0 else f"{i+1}/{total_count}"
 
                 await self.bot.send_photo(
                     chat_id=message.chat.id,
@@ -224,33 +208,27 @@ class TgPostingBot:
             buttons.append(row)
 
         buttons.append([
-            InlineKeyboardButton(text="💾 Все фото",
+            InlineKeyboardButton(text="Все фото",
                               callback_data=f"img_all_{table_name}_{row_num}_{item_id}"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="img_cancel")
+            InlineKeyboardButton(text="Отмена", callback_data="img_cancel")
         ])
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
         await message.answer(
-            f"👇 <b>Выбери фото:</b>\n\n"
-            f"📊 Всего: <b>{total_count}</b> шт\n"
-            f"📁 Имя файла: <code>{table_name}_{row_num}_номер.webp</code>",
+            f"<b>Выбери фото:</b>\n\n"
+            f"Всего: <b>{total_count}</b> шт\n"
+            f"Имя файла: <code>{table_name}_{row_num}_номер.webp</code>",
             reply_markup=keyboard,
             parse_mode=ParseMode.HTML
         )
 
     async def _on_save_one_photo(self, callback):
-        """Сохранение одного фото"""
-        from aiogram.enums import ParseMode
-        from aiogram.types import BufferedInputFile
-        import os
-        import aiohttp
-
         data_str = callback.data.replace('img_save_', '')
         all_parts = data_str.split('_')
 
         if len(all_parts) < 4:
-            await callback.answer("❌ Ошибка данных", show_alert=True)
+            await callback.answer("Ошибка данных", show_alert=True)
             return
 
         try:
@@ -260,20 +238,20 @@ class TgPostingBot:
             table_name = '_'.join(all_parts[:-3])
 
         except (ValueError, IndexError):
-            await callback.answer("❌ Ошибка формата", show_alert=True)
+            await callback.answer("Ошибка формата", show_alert=True)
             return
 
         data = self._get_row(table_name, row_num)
 
         if not data:
-            await callback.answer("❌ Товар не найден", show_alert=True)
+            await callback.answer("Товар не найден", show_alert=True)
             return
 
         images_str = data.get('images', '')
         image_urls = [img.strip() for img in images_str.split(';') if img.strip()]
 
         if not image_urls or img_index >= len(image_urls):
-            await callback.answer("❌ Фото не найдено", show_alert=True)
+            await callback.answer("Фото не найдено", show_alert=True)
             return
 
         url = image_urls[img_index]
@@ -286,7 +264,7 @@ class TgPostingBot:
         filename = f"{table_name}_{row_num}_{img_index + 1}.webp"
         filepath = os.path.join(save_dir, filename)
 
-        await callback.message.answer(f"💾 Скачиваю фото {img_index + 1}...")
+        await callback.message.answer(f"Скачиваю фото {img_index + 1}...")
 
         try:
             async with aiohttp.ClientSession() as session:
@@ -305,33 +283,28 @@ class TgPostingBot:
                         await callback.message.answer_photo(
                             photo=photo_buffer,
                             caption=(
-                                f"✅ <b>Сохранено!</b>\n\n"
-                                f"📁 <code>{filename}</code>\n"
-                                f"📷 Фото: {img_index + 1} / {total}\n"
-                                f"📊 Таблица: <code>{table_name}</code>"
+                                f"<b>Сохранено!</b>\n\n"
+                                f"<code>{filename}</code>\n"
+                                f"Фото: {img_index + 1} / {total}\n"
+                                f"Таблица: <code>{table_name}</code>"
                             ),
                             parse_mode=ParseMode.HTML
                         )
                     else:
-                        await callback.message.answer(f"❌ Ошибка HTTP {response.status}")
+                        await callback.message.answer(f"Ошибка HTTP {response.status}")
 
         except Exception as e:
             logger.error(f"Ошибка сохранения: {e}")
-            await callback.message.answer(f"❌ Ошибка: {e}")
+            await callback.message.answer(f"Ошибка: {e}")
 
-        await callback.answer("✅ Готово!")
+        await callback.answer("Готово!")
 
     async def _on_save_all_photos(self, callback):
-        """Сохранение всех фото"""
-        from aiogram.enums import ParseMode
-        import os
-        import aiohttp
-
         data_str = callback.data.replace('img_all_', '')
         all_parts = data_str.split('_')
 
         if len(all_parts) < 3:
-            await callback.answer("❌ Ошибка данных", show_alert=True)
+            await callback.answer("Ошибка данных", show_alert=True)
             return
 
         try:
@@ -340,13 +313,13 @@ class TgPostingBot:
             table_name = '_'.join(all_parts[:-2])
 
         except (ValueError, IndexError):
-            await callback.answer("❌ Ошибка формата", show_alert=True)
+            await callback.answer("Ошибка формата", show_alert=True)
             return
 
         data = self._get_row(table_name, row_num)
 
         if not data:
-            await callback.answer("❌ Товар не найден", show_alert=True)
+            await callback.answer("Товар не найден", show_alert=True)
             return
 
         images_str = data.get('images', '')
@@ -354,7 +327,7 @@ class TgPostingBot:
 
         total = len(image_urls)
 
-        await callback.message.answer(f"💾 Скачиваю все {total} фото...")
+        await callback.message.answer(f"Скачиваю все {total} фото...")
 
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         save_dir = os.path.join(base_dir, 'maker_images', 'source_images')
@@ -385,31 +358,26 @@ class TgPostingBot:
                 await asyncio.sleep(0.3)
 
         await callback.message.answer(
-            f"✅ <b>Готово!</b>\n\n"
-            f"📊 <code>{table_name}</code>\n"
-            f"📁 Папка: <code>maker_images/source_images/</code>\n"
-            f"💾 Сохранено: <b>{saved}</b> / {total}\n"
-            f"❌ Ошибок: <b>{failed}</b>",
+            f"<b>Готово!</b>\n\n"
+            f"<code>{table_name}</code>\n"
+            f"Папка: <code>maker_images/source_images/</code>\n"
+            f"Сохранено: <b>{saved}</b> / {total}\n"
+            f"Ошибок: <b>{failed}</b>",
             parse_mode=ParseMode.HTML
         )
 
-        await callback.answer(f"✅ Сохранено {saved} фото!")
+        await callback.answer(f"Сохранено {saved} фото!")
 
     async def cmd_post(self, message):
-        """Пост с выбором фотографии"""
-        from aiogram.enums import ParseMode
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-        import glob
-
         if message.from_user.id not in ADMIN_IDS:
-            await message.answer("❌ Нет доступа")
+            await message.answer("Нет доступа")
             return
 
         args = message.text.split(maxsplit=2)
 
         if len(args) < 3:
             await message.answer(
-                "❌ Формат:\n<code>/post таблица номер</code>",
+                "Формат:\n<code>/post таблица номер</code>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -419,14 +387,14 @@ class TgPostingBot:
         try:
             row_num = int(args[2])
         except ValueError:
-            await message.answer("❌ Номер — число!")
+            await message.answer("Номер — число!")
             return
 
         data = self._get_row(table_name, row_num)
 
         if not data:
             await message.answer(
-                f"❌ Не найдено: <code>{table_name}</code> строка {row_num}",
+                f"Не найдено: <code>{table_name}</code> строка {row_num}",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -434,7 +402,6 @@ class TgPostingBot:
         item_id = data.get('id', '-')
         post_text = self._format_post(data)
 
-        # === ИЩЕМ ФОТО В ПАПКЕ ===
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         save_dir = os.path.join(base_dir, 'maker_images', 'source_images')
 
@@ -460,7 +427,6 @@ class TgPostingBot:
                         'name': os.path.basename(f)
                     })
 
-        # Убираем дубликаты
         seen_names = set()
         unique_photos = []
 
@@ -471,7 +437,6 @@ class TgPostingBot:
 
         available_photos = unique_photos[:10]
 
-        # Если нет фото - постим без картинки
         if not available_photos:
             try:
                 msg = await self.bot.send_message(
@@ -483,37 +448,34 @@ class TgPostingBot:
 
                 keyboard = InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(
-                        text="✅",
+                        text="+",
                         url=f"https://t.me/{CHANNEL_ID.lstrip('@')}/{msg.message_id}"
                     )]
                 ])
 
                 await message.answer(
-                    f"✅ Опубликовано! 📝\n\n"
-                    f"📊 <code>{table_name}</code>\n"
-                    f"🔢 Строка: {row_num}\n\n"
-                    f"⚠️ Фото не найдено!\n"
-                    f"💡 Сначала: <code>/images {table_name} {row_num}</code>",
+                    f"Опубликовано! 📝\n\n"
+                    f"<code>{table_name}</code>\n"
+                    f"Строка: {row_num}\n\n"
+                    f"Фото не найдено!\n"
+                    f"Сначала: <code>/images {table_name} {row_num}</code>",
                     reply_markup=keyboard,
                     parse_mode=ParseMode.HTML
                 )
 
             except Exception as e:
                 logger.error(f"Ошибка: {e}")
-                await message.answer(f"❌ Ошибка: {e}")
+                await message.answer(f"Ошибка: {e}")
 
             return
 
-        # Показываем превью
         await message.answer(
-            f"📷 <b>Выбери фото для поста:</b>\n\n"
-            f"🆔 Артикул: <code>{item_id}</code>\n"
-            f"📦 {data.get('name', '')[:50]}\n\n"
-            f"🖼️ Доступно: <b>{len(available_photos)}</b> шт",
+            f"<b>Выбери фото для поста:</b>\n\n"
+            f"Артикул: <code>{item_id}</code>\n"
+            f"{data.get('name', '')[:50]}\n\n"
+            f"Доступно: <b>{len(available_photos)}</b> шт",
             parse_mode=ParseMode.HTML
         )
-
-        # Превью первых 3
         for i, photo in enumerate(available_photos[:3]):
             try:
                 with open(photo['path'], 'rb') as file:
@@ -522,7 +484,7 @@ class TgPostingBot:
                 from aiogram.types import BufferedInputFile
                 photo_buf = BufferedInputFile(file_data, filename=photo['name'])
 
-                caption = f"📷 {i+1}/{len(available_photos)}" if i == 0 else f"{i+1}/{len(available_photos)}"
+                caption = f"{i+1}/{len(available_photos)}" if i == 0 else f"{i+1}/{len(available_photos)}"
 
                 await self.bot.send_photo(
                     chat_id=message.chat.id,
@@ -534,14 +496,13 @@ class TgPostingBot:
             except Exception as e:
                 logger.warning(f"Превью не загрузилось: {e}")
 
-        # Кнопки выбора
         buttons = []
         row = []
 
         for i, photo in enumerate(available_photos):
             row.append(
                 InlineKeyboardButton(
-                    text=f"📷 {i+1}",
+                    text=f"{i+1}",
                     callback_data=f"postphoto_{table_name}_{row_num}_{item_id}_{i}"
                 )
             )
@@ -554,31 +515,26 @@ class TgPostingBot:
             buttons.append(row)
 
         buttons.append([
-            InlineKeyboardButton(text="💾 Без фото", callback_data="post_nophoto"),
-            InlineKeyboardButton(text="❌ Отмена", callback_data="post_cancel")
+            InlineKeyboardButton(text="Без фото", callback_data="post_nophoto"),
+            InlineKeyboardButton(text="Отмена", callback_data="post_cancel")
         ])
 
         keyboard = InlineKeyboardMarkup(inline_keyboard=buttons)
 
         await message.answer(
-            f"👇 <b>Выбери фото:</b>\n\n"
-            f"📊 Таблица: <code>{table_name}</code>\n"
-            f"🔢 Строка: {row_num}",
+            f"<b>Выбери фото:</b>\n\n"
+            f"Таблица: <code>{table_name}</code>\n"
+            f"Строка: {row_num}",
             reply_markup=keyboard,
             parse_mode=ParseMode.HTML
         )
 
     async def _on_post_with_photo(self, callback):
-        """Пост с выбранной фоткой"""
-        from aiogram.enums import ParseMode
-        from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InlineKeyboardButton
-        import os
-
         data_str = callback.data.replace('postphoto_', '')
         all_parts = data_str.split('_')
 
         if len(all_parts) < 4:
-            await callback.answer("❌ Ошибка", show_alert=True)
+            await callback.answer("Ошибка", show_alert=True)
             return
 
         try:
@@ -588,13 +544,13 @@ class TgPostingBot:
             table_name = '_'.join(all_parts[:-3])
 
         except (ValueError, IndexError):
-            await callback.answer("❌ Ошибка формата", show_alert=True)
+            await callback.answer("Ошибка формата", show_alert=True)
             return
 
         data = self._get_row(table_name, row_num)
 
         if not data:
-            await callback.answer("❌ Товар не найден", show_alert=True)
+            await callback.answer("Товар не найден", show_alert=True)
             return
 
         post_text = self._format_post(data)
@@ -619,7 +575,7 @@ class TgPostingBot:
         valid_files.sort()
 
         if img_index >= len(valid_files):
-            await callback.answer("❌ Фото не найдено", show_alert=True)
+            await callback.answer("Фото не найдено", show_alert=True)
             return
 
         photo_path = valid_files[img_index]
@@ -641,7 +597,7 @@ class TgPostingBot:
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [
                     InlineKeyboardButton(
-                        text="✅",
+                        text="+",
                         url=f"https://t.me/{CHANNEL_ID.lstrip('@')}/{msg.message_id}"
                     ),
                     InlineKeyboardButton(text="🗑️", callback_data=f"del_{msg.message_id}")
@@ -649,25 +605,21 @@ class TgPostingBot:
             ])
 
             await callback.message.answer(
-                f"✅ Опубликовано! 📷\n\n"
-                f"📁 <code>{filename}</code>\n"
-                f"📊 <code>{table_name}</code>\n"
-                f"🔢 Строка: {row_num}",
+                f"Опубликовано! 📷\n\n"
+                f"<code>{filename}</code>\n"
+                f"<code>{table_name}</code>\n"
+                f"Строка: {row_num}",
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
 
-            await callback.answer("✅ Готово!")
+            await callback.answer("Готово!")
 
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await callback.message.answer(f"❌ Ошибка: {e}")
+            await callback.message.answer(f"Ошибка: {e}")
 
     async def _on_post_without_photo(self, callback):
-        """Пост без фотографии"""
-        from aiogram.enums import ParseMode
-        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-
         data_str = callback.data.replace('post_nophoto_', '')
         parts = data_str.split('_')
 
@@ -681,7 +633,7 @@ class TgPostingBot:
         data = self._get_row(table_name, row_num)
 
         if not data:
-            await callback.answer("❌ Товар не найден", show_alert=True)
+            await callback.answer("Товар не найден", show_alert=True)
             return
 
         post_text = self._format_post(data)
@@ -696,37 +648,35 @@ class TgPostingBot:
 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(
-                    text="✅",
+                    text="+",
                     url=f"https://t.me/{CHANNEL_ID.lstrip('@')}/{msg.message_id}"
                 )]
             ])
 
             await callback.message.answer(
-                f"✅ Опубликовано! 📝\n\n"
-                f"📊 <code>{table_name}</code>\n"
-                f"🔢 Строка: {row_num}",
+                f"Опубликовано! 📝\n\n"
+                f"<code>{table_name}</code>\n"
+                f"Строка: {row_num}",
                 reply_markup=keyboard,
                 parse_mode=ParseMode.HTML
             )
 
-            await callback.answer("✅ Готово!")
+            await callback.answer("Готово!")
 
         except Exception as e:
             logger.error(f"Ошибка: {e}")
-            await callback.message.answer(f"❌ Ошибка: {e}")
+            await callback.message.answer(f"Ошибка: {e}")
 
     async def cmd_preview(self, message):
-        from aiogram.enums import ParseMode
-
         if message.from_user.id not in ADMIN_IDS:
-            await message.answer("❌ Нет доступа")
+            await message.answer("Нет доступа")
             return
 
         args = message.text.split(maxsplit=2)
 
         if len(args) < 3:
             await message.answer(
-                "❌ Формат:\n<code>/preview таблица номер</code>",
+                "Формат:\n<code>/preview таблица номер</code>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -736,27 +686,25 @@ class TgPostingBot:
         try:
             row_num = int(args[2])
         except ValueError:
-            await message.answer("❌ Номер — число!")
+            await message.answer("Номер — число!")
             return
 
         data = self._get_row(table_name, row_num)
 
         if not data:
-            await message.answer("❌ Не найдено")
+            await message.answer("Не найдено")
             return
 
         post_text = self._format_post(data)
 
         await message.answer(
-            f"👁️ <b>PREVIEW</b>\n\n{post_text}",
+            f"<b>PREVIEW</b>\n\n{post_text}",
             parse_mode=ParseMode.HTML
         )
 
     async def cmd_parsing(self, message):
-        from aiogram.enums import ParseMode
-
         if message.from_user.id not in ADMIN_IDS:
-            await message.answer("❌ Нет доступа")
+            await message.answer("Нет доступа")
             return
 
         if not self._parsing_lock.acquire(blocking=False):
@@ -768,7 +716,7 @@ class TgPostingBot:
         if len(args) < 2:
             self._parsing_lock.release()
             await message.answer(
-                "❌ Формат:\n<code>/parsing запрос</code>",
+                "Формат:\n<code>/parsing запрос</code>",
                 parse_mode=ParseMode.HTML
             )
             return
@@ -776,9 +724,9 @@ class TgPostingBot:
         query = args[1].strip()
 
         status_msg = await message.answer(
-            f"🚀 <b>Запускаю парсинг...</b>\n\n"
-            f"🔍 Запрос: <code>{query}</code>\n\n"
-            f"⏳ Ожидайте...",
+            f"<b>Запускаю парсинг...</b>\n\n"
+            f"Запрос: <code>{query}</code>\n\n"
+            f"Ожидайте...",
             parse_mode=ParseMode.HTML
         )
 
@@ -814,30 +762,26 @@ class TgPostingBot:
                     db_count = db.get_count(table_name)
 
                 await status_msg.edit_text(
-                    f"✅ <b>ПАРСИНГ ЗАВЕРШЁН!</b>\n\n"
-                    f"🔍 Запрос: <code>{query}</code>\n"
-                    f"📊 Таблица: <code>{table_name}</code>\n"
-                    f"📦 Товаров: <b>{db_count}</b> шт\n\n"
-                    f"💡 Постить:\n<code>/post {table_name} 1</code>",
+                    f"<b>ПАРСИНГ ЗАВЕРШЁН!</b>\n\n"
+                    f"Запрос: <code>{query}</code>\n"
+                    f"Таблица: <code>{table_name}</code>\n"
+                    f"Товаров: <b>{db_count}</b> шт\n\n"
+                    f"Постить:\n<code>/post {table_name} 1</code>",
                     parse_mode=ParseMode.HTML
                 )
             else:
                 await status_msg.edit_text(
-                    f"⚠️ <b>ПАРСИНГ ЗАВЕРШЁН!</b>\n\n"
-                    f"🔍 Запрос: <code>{query}</code>\n"
-                    f"📦 Товаров: <b>0</b>",
+                    f"<b>ПАРСИНГ ЗАВЕРШЁН!</b>\n\n"
+                    f"Запрос: <code>{query}</code>\n"
+                    f"Товаров: <b>0</b>",
                     parse_mode=ParseMode.HTML
                 )
         else:
             error = parsing_result.get("error", "Неизвестная ошибка")
             await status_msg.edit_text(
-                f"❌ <b>ОШИБКА ПАРСИНГА</b>\n\n{error[:500]}",
+                f"<b>ОШИБКА ПАРСИНГА</b>\n\n{error[:500]}",
                 parse_mode=ParseMode.HTML
             )
-
-    # ============================================
-    # ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ
-    # ============================================
 
     def _get_row(self, table_name: str, row_num: int) -> dict | None:
         try:
@@ -854,7 +798,6 @@ class TgPostingBot:
             return None
 
     def _escape_html(self, text: str) -> str:
-        """Экранирование спецсимволов для HTML"""
         if not text:
             return ''
         return (str(text)
@@ -911,7 +854,6 @@ class TgPostingBot:
         parts.append(info)
 
         clean_link = link.replace('\u200B', '')
-        # ✅ ИСПРАВЛЕНО: один </a>
         parts.append(f"\n\n🔗 <a href=\"{clean_link}\">🛒 ПЕРЕЙТИ НА WILDBERRIES 🛒</a>")
 
         return "\n".join(parts)

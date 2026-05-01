@@ -3,7 +3,6 @@
 
 from bisect import bisect
 
-# только верхние границы
 BASKET_ENDS = [
     143, 287, 431, 719, 1007, 1061, 1115, 1169, 1313, 1601,
     1655, 1919, 2045, 2189, 2405, 2621, 2837, 3053, 3269, 3485,
@@ -15,5 +14,3 @@ def calc_numb_basket(short_id: int) -> str:
     basket = bisect(BASKET_ENDS, short_id) + 1
     return f"{basket:02d}"
 
-#https://basket-10.wbbasket.ru/vol1539/part153902/153902320/images/big/1.webp
-#https://basket-10.wbbasket.ru/vol1539/part153902/153902320/images/big/1.webp

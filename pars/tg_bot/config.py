@@ -1,7 +1,7 @@
-BOT_TOKEN = "8698457694:AAEvljol8ELL2n6u13h3GRLpf59HJO-FNhc"
+BOT_TOKEN = "СЮДА НУЖНО ВСТАВИТЬ ТОКЕН БОТА"
 
-CHANNEL_ID = "-1003656571933"
+CHANNEL_ID = "СЮДА АЙДИ ТГК"
 
-ADMIN_IDS = [8534664751]
+ADMIN_IDS = [] #СЮДА СВОЙ ТГ АЙДИ
 
-PROXY_URL = None
+PROXY_URL = None #СЮДА СВОЙ ПРОКСИ

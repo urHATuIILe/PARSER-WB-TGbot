@@ -6,13 +6,13 @@ from add_images import add_images
 from add_price_wb_wallet import add_price_with_wb_wallet
 from get_price_range import WbSearchPhraseParserRange
 from get_token import get_token
-from DataBaseWb.saver import Items, Saver
+from pars.DataBaseWb.saver import Items, Saver
 from wb_catalog_parser import WbCatalogAsyncFetcher
 
 
 def parse(search_phrase):
     cookies = {
-        'x_wbaas_token': "1.1000.47e3db263f2541b0b5890da8bd1a57fd.MHw3Ny4yMjIuOTYuMTAzfE1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIENocm9tZS8xNDcuMC4wLjAgU2FmYXJpLzUzNy4zNnwxNzc4MDA4MzgyfHJldXNhYmxlfDJ8ZXlKb1lYTm9Jam9pSW4wPXwwfDN8MTc3NzQwMzU4Mnwx.MEQCIDLw3aLgjRS3YZvmAv60AvhVeBMIc6AQD+C6Vxip3NziAiAgnjzzs9AJbr53Wm6wjYQfdTqSP+ZBYFLjkJtHiG4zCg==; _wbauid=6072866381776798807",
+        'x_wbaas_token': "СЮДА ТОКЕН КУКИ ВСТАВИТЬ НАДО",
         '_wbauid': '625729131775405841',
         '_cp': '1',
     }

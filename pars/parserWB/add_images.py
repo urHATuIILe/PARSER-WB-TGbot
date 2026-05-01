@@ -1,6 +1,6 @@
 
 from calc_basket import calc_numb_basket
-from DataBaseWb.saver import Item
+from pars.DataBaseWb.saver import Item
 
 
 MAX_IMAGES = 10

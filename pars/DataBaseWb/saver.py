@@ -1,14 +1,9 @@
-"""
-Saver - сохранение в PostgreSQL
-Таблица по названию запроса
-"""
 
 from pydantic import BaseModel, model_validator
 from typing import Optional
 from loguru import logger
 
 from .database import DatabaseManager
-
 
 class Price(BaseModel):
     basic: Optional[float] = None
@@ -64,13 +59,7 @@ class Items(BaseModel):
 
 
 class Saver:
-    """Сохранение товаров в PostgreSQL"""
-
     def __init__(self, query: str):
-        """
-        Args:
-            query: Название запроса (имя таблицы)
-        """
         self.query = query
         self.db = DatabaseManager()
         self.table_name = None
@@ -84,14 +73,12 @@ class Saver:
         self.db.close()
 
     def save(self, item: Item) -> bool:
-        """Сохранить один товар"""
         if not self.table_name:
             logger.error("Таблица не создана")
             return False
         return self.db.insert_product(self.table_name, item)
 
     def save_many(self, items: list[Item]) -> int:
-        """Сохранить список товаров"""
         if not self.table_name:
             logger.error("Таблица не создана")
             return 0
@@ -112,14 +99,12 @@ class Saver:
 
     @property
     def count(self) -> int:
-        """Количество записей"""
         if not self.table_name:
             return 0
         return self.db.get_count(self.table_name)
 
     @property
     def table(self) -> str | None:
-        """Имя таблицы"""
         return self.table_name
 
 
