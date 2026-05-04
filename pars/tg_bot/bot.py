@@ -4,6 +4,10 @@ import sys
 import os
 import asyncio
 import threading
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any
+from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -13,10 +17,265 @@ from aiogram import Bot, Dispatcher, F
 from aiogram.client.session.aiohttp import AiohttpSession
 from aiogram.filters import Command
 from aiogram.enums import ParseMode
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, BufferedInputFile
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    BufferedInputFile,
+    Message,
+    CallbackQuery
+)
 
 from pars.DataBaseWb.database import DatabaseManager
 from pars.tg_bot.config import BOT_TOKEN, CHANNEL_ID, ADMIN_IDS, PROXY_URL
+
+
+@dataclass
+class ProductData:
+    id: str
+    name: str
+    brand: str
+    price: Optional[float]
+    sale_price: Optional[float]
+    wb_wallet: Optional[float]
+    rating: str
+    quantity: int
+    supplier_name: str
+    feedbacks: int
+    entity: str
+    link: str
+    images: str
+
+    @classmethod
+    def from_dict(cls, data: dict) -> 'ProductData':
+        return cls(
+            id=str(data.get('id', '-')),
+            name=data.get('name', 'Без названия'),
+            brand=data.get('brand', '-'),
+            price=data.get('price'),
+            sale_price=data.get('sale_price'),
+            wb_wallet=data.get('wb_wallet'),
+            rating=data.get('rating', '-'),
+            quantity=data.get('quantity', 0),
+            supplier_name=data.get('supplier_name', '-'),
+            feedbacks=data.get('feedbacks', 0),
+            entity=data.get('entity', ''),
+            link=data.get('link', '#'),
+            images=data.get('images', '')
+        )
+
+
+@dataclass
+class PhotoInfo:
+    path: Path
+    name: str
+    size: int
+
+
+class DatabaseService:
+
+    def __init__(self):
+        self._db_manager = DatabaseManager
+
+    def get_table_list(self) -> List[str]:
+        with self._db_manager() as db:
+            return db.list_tables()
+
+    def get_row_count(self, table_name: str) -> int:
+        with self._db_manager() as db:
+            return db.get_count(table_name)
+
+    def get_product(self, table_name: str, row_num: int) -> Optional[ProductData]:
+        try:
+            with self._db_manager() as db:
+                rows = db.get_all(table_name, limit=10000)
+
+                if row_num < 1 or row_num > len(rows):
+                    return None
+
+                return ProductData.from_dict(rows[row_num - 1])
+
+        except Exception as e:
+            logger.error(f"Ошибка получения данных: {e}")
+            return None
+
+
+class ImageService:
+
+    def __init__(self, base_dir: Path = None):
+        self.base_dir = base_dir or Path(__file__).parent.parent
+        self.images_dir = self.base_dir / 'maker_images' / 'source_images'
+
+    async def download_image(
+            self,
+            url: str,
+            save_path: Path,
+            timeout: int = 30
+    ) -> bool:
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                        url,
+                        timeout=aiohttp.ClientTimeout(total=timeout)
+                ) as response:
+                    if response.status == 200:
+                        content = await response.read()
+                        save_path.write_bytes(content)
+                        return True
+                    return False
+        except Exception as e:
+            logger.error(f"Ошибка скачивания {url}: {e}")
+            return False
+
+    async def download_images_batch(
+            self,
+            urls: List[str],
+            table_name: str,
+            row_num: int
+    ) -> Dict[str, int]:
+        self.images_dir.mkdir(parents=True, exist_ok=True)
+
+        saved, failed = 0, 0
+
+        for i, url in enumerate(urls):
+            filename = f"{table_name}_{row_num}_{i + 1}.webp"
+            filepath = self.images_dir / filename
+
+            if await self.download_image(url, filepath):
+                saved += 1
+            else:
+                failed += 1
+
+            await asyncio.sleep(0.3)
+
+        return {'saved': saved, 'failed': failed, 'total': len(urls)}
+
+    def find_local_photos(
+            self,
+            table_name: str,
+            row_num: int,
+            item_id: str
+    ) -> List[PhotoInfo]:
+        patterns = [
+            f"{table_name}_{row_num}_*.webp",
+            f"{item_id}_*.webp",
+            "*.webp"
+        ]
+
+        photos = []
+        seen_names = set()
+
+        for pattern in patterns:
+            for filepath in self.images_dir.glob(pattern):
+                if filepath.is_file() and filepath.stat().st_size > 0:
+                    if filepath.name not in seen_names:
+                        seen_names.add(filepath.name)
+                        photos.append(PhotoInfo(
+                            path=filepath,
+                            name=filepath.name,
+                            size=filepath.stat().st_size
+                        ))
+
+        return photos[:10]
+
+
+class PostFormatter:
+
+    @staticmethod
+    def escape_html(text: str) -> str:
+        if not text:
+            return ''
+        return (str(text)
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;'))
+
+    def format_post(self, product: ProductData) -> str:
+        item_id = self.escape_html(product.id)
+        name = self.escape_html(product.name[:100])
+        brand = self.escape_html(product.brand)
+        rating = self.escape_html(product.rating)
+        supplier = self.escape_html(product.supplier_name)
+        entity = self.escape_html(product.entity)
+        link = product.link.replace('\u200B', '')
+
+        parts = [f"🆔 <b>Артикул: {item_id}</b>"]
+
+        prefix = '🔥' if product.sale_price else ''
+        parts.append(f"\n{prefix} <b>{name}</b>")
+
+        price_lines = self._format_prices(product)
+        if price_lines:
+            parts.append("\n" + "\n".join(price_lines))
+
+        info = (
+            f"\n🏷 Бренд: {brand}"
+            f"\n⭐ Рейтинг: {rating} ({product.feedbacks} отзывов)"
+            f"\n📦 В наличии: {product.quantity} шт"
+            f"\n🏪 Продавец: {supplier}"
+        )
+
+        if entity:
+            info += f"\n📂 Категория: {entity}"
+
+        parts.append(info)
+
+        parts.append(
+            f"\n\n🔗 <a href=\"{link}\">🛒 ПЕРЕЙТИ НА WILDBERRIES 🛒</a>"
+        )
+
+        return "\n".join(parts)
+
+    def _format_prices(self, product: ProductData) -> List[str]:
+        lines = []
+
+        if product.price:
+            if product.sale_price and product.sale_price != product.price:
+                discount = int(100 - (product.sale_price / product.price * 100))
+                lines.append(
+                    f"💰 ~~{int(product.price):,}~~ → "
+                    f"<b>{int(product.sale_price):,} ₽</b> (-{discount}%)"
+                )
+
+                if product.wb_wallet:
+                    lines.append(
+                        f"🛒 WB кошелёк: <b>{int(product.wb_wallet):,} ₽</b>"
+                    )
+            else:
+                lines.append(f"💰 <b>{int(product.price):,} ₽</b>")
+
+        return lines
+
+
+class ParsingService:
+
+    def __init__(self):
+        self._lock = threading.Lock()
+
+    def is_parsing_running(self) -> bool:
+        return not self._lock.acquire(blocking=False)
+
+    def release_lock(self):
+        if self._lock.locked():
+            self._lock.release()
+
+    async def start_parsing(self, query: str) -> Dict[str, Any]:
+        def do_parse():
+            try:
+                from pars.main import parse
+                logger.info(f"Запуск парсинга: {query}")
+                result = parse(search_phrase=query)
+                return {"success": True, "result": result}
+            except Exception as e:
+                logger.error(f"Ошибка парсинга: {e}")
+                return {"success": False, "error": str(e)}
+
+        loop = asyncio.get_event_loop()
+        future = loop.run_in_executor(None, do_parse)
+
+        while not future.done():
+            await asyncio.sleep(3)
+
+        return future.result()
 
 
 class TgPostingBot:
@@ -25,6 +284,11 @@ class TgPostingBot:
         self.bot = None
         self.dp = None
         self._parsing_lock = threading.Lock()
+
+        self.db_service = DatabaseService()
+        self.image_service = ImageService()
+        self.formatter = PostFormatter()
+        self.parsing_service = ParsingService()
 
     async def _create_bot(self):
         if PROXY_URL:
@@ -38,14 +302,12 @@ class TgPostingBot:
         self._register_handlers()
 
     def _register_handlers(self):
-        # Команды
         self.dp.message(Command("start"))(self.cmd_start)
         self.dp.message(Command("post"))(self.cmd_post)
         self.dp.message(Command("preview"))(self.cmd_preview)
         self.dp.message(Command("tables"))(self.cmd_tables)
         self.dp.message(Command("parsing"))(self.cmd_parsing)
         self.dp.message(Command("images"))(self.cmd_images)
-
 
         @self.dp.callback_query(F.data.startswith('img_save_'))
         async def callback_img_save(callback):
@@ -97,8 +359,7 @@ class TgPostingBot:
             return
 
         try:
-            with DatabaseManager() as db:
-                tables = db.list_tables()
+            tables = self.db_service.get_table_list()
 
             if not tables:
                 await message.answer("Таблиц нет")
@@ -107,8 +368,7 @@ class TgPostingBot:
             text = f"<b>Таблицы ({len(tables)}):</b>\n\n"
 
             for i, table in enumerate(tables[:20], 1):
-                with DatabaseManager() as db_count:
-                    count = db_count.get_count(table)
+                count = self.db_service.get_row_count(table)
                 text += f"{i}. <code>{table}</code> ({count})\n"
 
             await message.answer(text, parse_mode=ParseMode.HTML)
@@ -139,25 +399,23 @@ class TgPostingBot:
             await message.answer("Номер — число!")
             return
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await message.answer(
                 f"Не найдено: <code>{table_name}</code> строка {row_num}",
                 parse_mode=ParseMode.HTML
             )
             return
 
-        item_id = data.get('id', '-')
-        name = data.get('name', 'Без названия')[:50]
-        images_str = data.get('images', '')
-
         await message.answer(
             f"📷 <b>Изображения товара</b>\n\n"
-            f"🆔 Артикул: <code>{item_id}</code>\n"
-            f"📦 {name}",
+            f"🆔 Артикул: <code>{product.id}</code>\n"
+            f"📦 {product.name[:50]}",
             parse_mode=ParseMode.HTML
         )
+
+        images_str = product.images
 
         if not images_str or images_str.strip() == '':
             await message.answer("<b>В БД нет изображений!</b>", parse_mode=ParseMode.HTML)
@@ -175,7 +433,7 @@ class TgPostingBot:
 
         for i in range(preview_count):
             try:
-                caption = f"{i+1}/{total_count}" if i == 0 else f"{i+1}/{total_count}"
+                caption = f"{i + 1}/{total_count}" if i == 0 else f"{i + 1}/{total_count}"
 
                 await self.bot.send_photo(
                     chat_id=message.chat.id,
@@ -185,7 +443,7 @@ class TgPostingBot:
                 await asyncio.sleep(0.3)
 
             except Exception as e:
-                logger.warning(f"Превью {i+1} не загрузилось: {e}")
+                logger.warning(f"Превью {i + 1} не загрузилось: {e}")
 
         buttons = []
         row = []
@@ -195,8 +453,8 @@ class TgPostingBot:
         for i in range(max_buttons):
             row.append(
                 InlineKeyboardButton(
-                    text=f"📷 {i+1}",
-                    callback_data=f"img_save_{table_name}_{row_num}_{item_id}_{i}"
+                    text=f"📷 {i + 1}",
+                    callback_data=f"img_save_{table_name}_{row_num}_{product.id}_{i}"
                 )
             )
 
@@ -209,7 +467,7 @@ class TgPostingBot:
 
         buttons.append([
             InlineKeyboardButton(text="Все фото",
-                              callback_data=f"img_all_{table_name}_{row_num}_{item_id}"),
+                                 callback_data=f"img_all_{table_name}_{row_num}_{product.id}"),
             InlineKeyboardButton(text="Отмена", callback_data="img_cancel")
         ])
 
@@ -241,13 +499,13 @@ class TgPostingBot:
             await callback.answer("Ошибка формата", show_alert=True)
             return
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await callback.answer("Товар не найден", show_alert=True)
             return
 
-        images_str = data.get('images', '')
+        images_str = product.images
         image_urls = [img.strip() for img in images_str.split(';') if img.strip()]
 
         if not image_urls or img_index >= len(image_urls):
@@ -257,41 +515,32 @@ class TgPostingBot:
         url = image_urls[img_index]
         total = len(image_urls)
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        save_dir = os.path.join(base_dir, 'maker_images', 'source_images')
-        os.makedirs(save_dir, exist_ok=True)
-
         filename = f"{table_name}_{row_num}_{img_index + 1}.webp"
-        filepath = os.path.join(save_dir, filename)
+        filepath = self.image_service.images_dir / filename
 
         await callback.message.answer(f"Скачиваю фото {img_index + 1}...")
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as response:
-                    if response.status == 200:
-                        content = await response.read()
+            success = await self.image_service.download_image(url, filepath)
 
-                        with open(filepath, 'wb') as f:
-                            f.write(content)
+            if success:
+                with open(filepath, 'rb') as file:
+                    file_data = file.read()
 
-                        with open(filepath, 'rb') as file:
-                            file_data = file.read()
+                photo_buffer = BufferedInputFile(file_data, filename=os.path.basename(filepath))
 
-                        photo_buffer = BufferedInputFile(file_data, filename=os.path.basename(filepath))
-
-                        await callback.message.answer_photo(
-                            photo=photo_buffer,
-                            caption=(
-                                f"<b>Сохранено!</b>\n\n"
-                                f"<code>{filename}</code>\n"
-                                f"Фото: {img_index + 1} / {total}\n"
-                                f"Таблица: <code>{table_name}</code>"
-                            ),
-                            parse_mode=ParseMode.HTML
-                        )
-                    else:
-                        await callback.message.answer(f"Ошибка HTTP {response.status}")
+                await callback.message.answer_photo(
+                    photo=photo_buffer,
+                    caption=(
+                        f"<b>Сохранено!</b>\n\n"
+                        f"<code>{filename}</code>\n"
+                        f"Фото: {img_index + 1} / {total}\n"
+                        f"Таблица: <code>{table_name}</code>"
+                    ),
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                await callback.message.answer(f"Ошибка HTTP при скачивании")
 
         except Exception as e:
             logger.error(f"Ошибка сохранения: {e}")
@@ -316,57 +565,31 @@ class TgPostingBot:
             await callback.answer("Ошибка формата", show_alert=True)
             return
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await callback.answer("Товар не найден", show_alert=True)
             return
 
-        images_str = data.get('images', '')
+        images_str = product.images
         image_urls = [img.strip() for img in images_str.split(';') if img.strip()]
 
         total = len(image_urls)
 
         await callback.message.answer(f"Скачиваю все {total} фото...")
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        save_dir = os.path.join(base_dir, 'maker_images', 'source_images')
-        os.makedirs(save_dir, exist_ok=True)
-
-        saved = 0
-        failed = 0
-
-        async with aiohttp.ClientSession() as session:
-            for i, url in enumerate(image_urls):
-
-                filename = f"{table_name}_{row_num}_{i + 1}.webp"
-                filepath = os.path.join(save_dir, filename)
-
-                try:
-                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=30)) as resp:
-                        if resp.status == 200:
-                            content = await resp.read()
-                            with open(filepath, 'wb') as f:
-                                f.write(content)
-                            saved += 1
-                        else:
-                            failed += 1
-
-                except Exception as e:
-                    failed += 1
-
-                await asyncio.sleep(0.3)
+        result = await self.image_service.download_images_batch(image_urls, table_name, row_num)
 
         await callback.message.answer(
             f"<b>Готово!</b>\n\n"
             f"<code>{table_name}</code>\n"
             f"Папка: <code>maker_images/source_images/</code>\n"
-            f"Сохранено: <b>{saved}</b> / {total}\n"
-            f"Ошибок: <b>{failed}</b>",
+            f"Сохранено: <b>{result['saved']}</b> / {total}\n"
+            f"Ошибок: <b>{result['failed']}</b>",
             parse_mode=ParseMode.HTML
         )
 
-        await callback.answer(f"Сохранено {saved} фото!")
+        await callback.answer(f"Сохранено {result['saved']} фото!")
 
     async def cmd_post(self, message):
         if message.from_user.id not in ADMIN_IDS:
@@ -390,52 +613,18 @@ class TgPostingBot:
             await message.answer("Номер — число!")
             return
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await message.answer(
                 f"Не найдено: <code>{table_name}</code> строка {row_num}",
                 parse_mode=ParseMode.HTML
             )
             return
 
-        item_id = data.get('id', '-')
-        post_text = self._format_post(data)
+        post_text = self.formatter.format_post(product)
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        save_dir = os.path.join(base_dir, 'maker_images', 'source_images')
-
-        available_photos = []
-
-        patterns = [
-            f"{table_name}_{row_num}_*.webp",
-            f"{item_id}_*.webp",
-            "*.webp"
-        ]
-
-        for pattern in patterns:
-            full_pattern = os.path.join(save_dir, pattern)
-            found = glob.glob(full_pattern)
-
-            for f in found:
-                is_file = os.path.isfile(f)
-                size = os.path.getsize(f) if is_file else 0
-
-                if is_file and size > 0:
-                    available_photos.append({
-                        'path': f,
-                        'name': os.path.basename(f)
-                    })
-
-        seen_names = set()
-        unique_photos = []
-
-        for p in available_photos:
-            if p['name'] not in seen_names:
-                seen_names.add(p['name'])
-                unique_photos.append(p)
-
-        available_photos = unique_photos[:10]
+        available_photos = self.image_service.find_local_photos(table_name, row_num, product.id)
 
         if not available_photos:
             try:
@@ -471,20 +660,20 @@ class TgPostingBot:
 
         await message.answer(
             f"<b>Выбери фото для поста:</b>\n\n"
-            f"Артикул: <code>{item_id}</code>\n"
-            f"{data.get('name', '')[:50]}\n\n"
+            f"Артикул: <code>{product.id}</code>\n"
+            f"{product.name[:50]}\n\n"
             f"Доступно: <b>{len(available_photos)}</b> шт",
             parse_mode=ParseMode.HTML
         )
+
         for i, photo in enumerate(available_photos[:3]):
             try:
-                with open(photo['path'], 'rb') as file:
+                with open(photo.path, 'rb') as file:
                     file_data = file.read()
 
-                from aiogram.types import BufferedInputFile
-                photo_buf = BufferedInputFile(file_data, filename=photo['name'])
+                photo_buf = BufferedInputFile(file_data, filename=photo.name)
 
-                caption = f"{i+1}/{len(available_photos)}" if i == 0 else f"{i+1}/{len(available_photos)}"
+                caption = f"{i + 1}/{len(available_photos)}" if i == 0 else f"{i + 1}/{len(available_photos)}"
 
                 await self.bot.send_photo(
                     chat_id=message.chat.id,
@@ -502,8 +691,8 @@ class TgPostingBot:
         for i, photo in enumerate(available_photos):
             row.append(
                 InlineKeyboardButton(
-                    text=f"{i+1}",
-                    callback_data=f"postphoto_{table_name}_{row_num}_{item_id}_{i}"
+                    text=f"{i + 1}",
+                    callback_data=f"postphoto_{table_name}_{row_num}_{product.id}_{i}"
                 )
             )
 
@@ -547,38 +736,21 @@ class TgPostingBot:
             await callback.answer("Ошибка формата", show_alert=True)
             return
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await callback.answer("Товар не найден", show_alert=True)
             return
 
-        post_text = self._format_post(data)
+        post_text = self.formatter.format_post(product)
 
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        save_dir = os.path.join(base_dir, 'maker_images', 'source_images')
+        photos = self.image_service.find_local_photos(table_name, row_num, item_id)
 
-        photo_path = None
-        photos_list = [
-            f"{table_name}_{row_num}_*.webp",
-            f"{item_id}_*.webp"
-        ]
-
-        found_files = []
-
-        for pattern in photos_list:
-            found_files.extend(glob.glob(os.path.join(save_dir, pattern)))
-
-        valid_files = [f for f in found_files
-                     if os.path.isfile(f) and os.path.getsize(f) > 0
-        ]
-        valid_files.sort()
-
-        if img_index >= len(valid_files):
+        if img_index >= len(photos):
             await callback.answer("Фото не найдено", show_alert=True)
             return
 
-        photo_path = valid_files[img_index]
+        photo_path = photos[img_index].path
         filename = os.path.basename(photo_path)
 
         try:
@@ -630,13 +802,13 @@ class TgPostingBot:
             row_num = int(parts[-1])
             table_name = '_'.join(parts[:-1])
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await callback.answer("Товар не найден", show_alert=True)
             return
 
-        post_text = self._format_post(data)
+        post_text = self.formatter.format_post(product)
 
         try:
             msg = await self.bot.send_message(
@@ -689,13 +861,13 @@ class TgPostingBot:
             await message.answer("Номер — число!")
             return
 
-        data = self._get_row(table_name, row_num)
+        product = self.db_service.get_product(table_name, row_num)
 
-        if not data:
+        if not product:
             await message.answer("Не найдено")
             return
 
-        post_text = self._format_post(data)
+        post_text = self.formatter.format_post(product)
 
         await message.answer(
             f"<b>PREVIEW</b>\n\n{post_text}",
@@ -730,36 +902,16 @@ class TgPostingBot:
             parse_mode=ParseMode.HTML
         )
 
-        def do_parse():
-            try:
-                from pars.main import parse
-
-                logger.info(f"Запуск парсинга: {query}")
-                result = parse(search_phrase=query)
-
-                return {"success": True, "query": query, "result": result}
-
-            except Exception as e:
-                logger.error(f"Ошибка парсинга: {e}")
-                return {"success": False, "error": str(e)}
-
-        loop = asyncio.get_event_loop()
-        future = loop.run_in_executor(None, do_parse)
-
-        while not future.done():
-            await asyncio.sleep(3)
-
-        parsing_result = future.result()
+        result = await self.parsing_service.start_parsing(query)
         self._parsing_lock.release()
 
-        if parsing_result.get("success"):
-            result_data = parsing_result["result"]
+        if result.get("success"):
+            result_data = result["result"]
 
             if result_data and len(result_data) > 0:
                 table_name = query.lower().replace(' ', '_').replace('-', '_')
 
-                with DatabaseManager() as db:
-                    db_count = db.get_count(table_name)
+                db_count = self.db_service.get_row_count(table_name)
 
                 await status_msg.edit_text(
                     f"<b>ПАРСИНГ ЗАВЕРШЁН!</b>\n\n"
@@ -777,86 +929,11 @@ class TgPostingBot:
                     parse_mode=ParseMode.HTML
                 )
         else:
-            error = parsing_result.get("error", "Неизвестная ошибка")
+            error = result.get("error", "Неизвестная ошибка")
             await status_msg.edit_text(
                 f"<b>ОШИБКА ПАРСИНГА</b>\n\n{error[:500]}",
                 parse_mode=ParseMode.HTML
             )
-
-    def _get_row(self, table_name: str, row_num: int) -> dict | None:
-        try:
-            with DatabaseManager() as db:
-                rows = db.get_all(table_name, limit=10000)
-
-                if row_num < 1 or row_num > len(rows):
-                    return None
-
-                return rows[row_num - 1]
-
-        except Exception as e:
-            logger.error(f"Ошибка _get_row: {e}")
-            return None
-
-    def _escape_html(self, text: str) -> str:
-        if not text:
-            return ''
-        return (str(text)
-                .replace('&', '&amp;')
-                .replace('<', '&lt;')
-                .replace('>', '&gt;'))
-
-    def _format_post(self, data: dict) -> str:
-
-        item_id = self._escape_html(data.get('id', '-'))
-        name = self._escape_html(data.get('name', 'Без названия'))
-        brand = self._escape_html(data.get('brand', '-'))
-        price = data.get('price')
-        sale_price = data.get('sale_price')
-        wb_wallet = data.get('wb_wallet')
-        rating = self._escape_html(data.get('rating', '-'))
-        quantity = data.get('quantity', 0)
-        supplier = self._escape_html(data.get('supplier_name', '-'))
-        feedbacks = data.get('feedbacks', 0)
-        entity = self._escape_html(data.get('entity', ''))
-        link = data.get('link', '#')
-
-        parts = [f"🆔 <b>Артикул: {item_id}</b>"]
-
-        prefix = '🔥' if sale_price else ''
-        parts.append(f"\n{prefix} <b>{name}</b>")
-
-        price_lines = []
-        if price:
-            if sale_price and sale_price != price:
-                discount = int(100 - (sale_price / price * 100))
-                price_lines.append(
-                    f"💰 ~~{int(price):,}~~ → "
-                    f"<b>{int(sale_price):,} ₽</b> (-{discount}%)"
-                )
-                if wb_wallet:
-                    price_lines.append(f"🛒 WB кошелёк: <b>{int(wb_wallet):,} ₽</b>")
-            else:
-                price_lines.append(f"💰 <b>{int(price):,} ₽</b>")
-
-        if price_lines:
-            parts.append("\n" + "\n".join(price_lines))
-
-        info = (
-            f"\n🏷 Бренд: {brand}"
-            f"\n⭐ Рейтинг: {rating} ({feedbacks} отзывов)"
-            f"\n📦 В наличии: {quantity} шт"
-            f"\n🏪 Продавец: {supplier}"
-        )
-
-        if entity:
-            info += f"\n📂 Категория: {entity}"
-
-        parts.append(info)
-
-        clean_link = link.replace('\u200B', '')
-        parts.append(f"\n\n🔗 <a href=\"{clean_link}\">🛒 ПЕРЕЙТИ НА WILDBERRIES 🛒</a>")
-
-        return "\n".join(parts)
 
     async def run(self):
         await self._create_bot()
