@@ -1,9 +1,9 @@
-
 from pydantic import BaseModel, model_validator
 from typing import Optional
 from loguru import logger
 
-from .database import DatabaseManager
+from .database import AsyncDatabaseManager
+
 
 class Price(BaseModel):
     basic: Optional[float] = None
@@ -58,27 +58,28 @@ class Items(BaseModel):
     products: list[Item]
 
 
-class Saver:
+class AsyncSaver:
+
     def __init__(self, query: str):
         self.query = query
-        self.db = DatabaseManager()
+        self.db = AsyncDatabaseManager()
         self.table_name = None
 
-    def __enter__(self):
-        self.db.connect()
-        self.table_name = self.db.create_table(self.query)
+    async def __aenter__(self):
+        await self.db.connect()
+        self.table_name = await self.db.create_table(self.query)
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        self.db.close()
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await self.db.close()
 
-    def save(self, item: Item) -> bool:
+    async def save(self, item: Item) -> bool:
         if not self.table_name:
             logger.error("Таблица не создана")
             return False
-        return self.db.insert_product(self.table_name, item)
+        return await self.db.insert_product(self.table_name, item)
 
-    def save_many(self, items: list[Item]) -> int:
+    async def save_many(self, items: list[Item]) -> int:
         if not self.table_name:
             logger.error("Таблица не создана")
             return 0
@@ -95,16 +96,41 @@ class Saver:
         if not unique_items:
             return 0
 
-        return self.db.insert_many(self.table_name, unique_items)
+        return await self.db.insert_many(self.table_name, unique_items)
+
+    async def save_many_batch(self, items: list[Item], batch_size: int = 1000) -> int:
+        if not self.table_name:
+            logger.error("Таблица не создана")
+            return 0
+
+        seen_ids = set()
+        unique_items = []
+
+        for item in items:
+            if not item or item.id in seen_ids:
+                continue
+            seen_ids.add(item.id)
+            unique_items.append(item)
+
+        if not unique_items:
+            return 0
+
+        return await self.db.insert_many_batch(self.table_name, unique_items, batch_size)
 
     @property
     def count(self) -> int:
         if not self.table_name:
             return 0
-        return self.db.get_count(self.table_name)
+        return 0
+
+    async def async_get_count(self) -> int:
+        if not self.table_name:
+            return 0
+        return await self.db.get_count(self.table_name)
 
     @property
     def table(self) -> str | None:
         return self.table_name
 
 
+Saver = AsyncSaver

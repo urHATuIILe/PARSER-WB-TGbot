@@ -6,13 +6,13 @@ from add_images import add_images
 from add_price_wb_wallet import add_price_with_wb_wallet
 from get_price_range import WbSearchPhraseParserRange
 from get_token import get_token
-from pars.DataBaseWb.saver import Items, Saver
+from DataBaseWb.saver import Items, AsyncSaver
 from wb_catalog_parser import WbCatalogAsyncFetcher
 
 
-def parse(search_phrase):
+async def parse(search_phrase):
     cookies = {
-        'x_wbaas_token': "СЮДА ТОКЕН КУКИ ВСТАВИТЬ НАДО",
+        'x_wbaas_token': "1.1000.5e39f0cede474d3e98e89a9cdafc87bc.MHw3Ny4yMjIuOTYuMTAzfE1vemlsbGEvNS4wIChXaW5kb3dzIE5UIDEwLjA7IFdpbjY0OyB4NjQpIEFwcGxlV2ViS2l0LzUzNy4zNiAoS0hUTUwsIGxpa2UgR2Vja28pIENocm9tZS8xNDcuMC4wLjAgU2FmYXJpLzUzNy4zNiBFZGcvMTQ3LjAuMC4wfDE3Nzk0NDcyMTN8cmV1c2FibGV8MnxleUpvWVhOb0lqb2lJbjA9fDB8M3wxNzc4ODQyNDEzfDE=.MEUCIF0Se5GFua9G/Vmr7s8SYDK+dcovPHs/mrC0LKRtj7LxAiEAhsUX6qeKq+TCXtbR2dLfDQTXxYoNAIqPBx+wwKAckqE=",
         '_wbauid': '625729131775405841',
         '_cp': '1',
     }
@@ -27,7 +27,7 @@ def parse(search_phrase):
     logger.info(f"Диапазоны получены: {price_ranges}")
 
     fetcher = WbCatalogAsyncFetcher(search_phrase=search_phrase, pages=price_ranges, cookies=cookies)
-    results = asyncio.run(fetcher.fetch_all())
+    results = await fetcher.fetch_all()
 
     if not results:
         logger.error("Не получены данные из каталога")
@@ -55,13 +55,12 @@ def parse(search_phrase):
 
     logger.info("Данные добавлены, перехожу к сохранению")
 
-    with Saver(search_phrase) as s:
-        count = s.save_many(product_models)
+    async with AsyncSaver(search_phrase) as s:
+        count = await s.save_many(product_models)
         logger.success(f"✓ Готово! {count} товаров → таблица '{s.table}'")
 
     return product_models
 
 
 if __name__ == "__main__":
-    parse(search_phrase="Baldy sempai")
-
+    asyncio.run(parse(search_phrase="Предтрен reqfull"), loop_factory=asyncio.SelectorEventLoop)
